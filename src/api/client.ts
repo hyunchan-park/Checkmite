@@ -50,6 +50,7 @@ export interface DensityResult {
     };
     densityGrade?: string;
     warnings?: string[];
+    qualityWarningSummary?: { count: number; sampleIndices: number[]; message: string } | null;
   };
   vitality?: {
     score: number;
@@ -85,6 +86,10 @@ export interface DensityResult {
       isLiveMotion: boolean;
     } | null;
   };
+  previous?: {
+    density?: { measurementId: string; measuredAt: string; densityPerLiter?: number; countValue?: number } | null;
+    vitality?: { measurementId: string; measuredAt: string; score?: number; activeRatio?: number | null } | null;
+  };
   measurement: Partial<Measurement>;
   vitalityMeasurement?: Partial<Measurement>;
   samples?: Array<{
@@ -101,6 +106,7 @@ export interface DensityResult {
     averageSpeedRatio?: number | null;
     confirmedTracks?: number;
     movingTracks?: number;
+    trackingVideoUrl?: string | null;
   }>;
 }
 
@@ -122,9 +128,12 @@ export interface DensityProgress {
     activeRatio?: number | null;
     confirmedTracks?: number;
     movingTracks?: number;
+    trackingVideoUrl?: string | null;
+    error?: string;
   }>;
   result: DensityResult | null;
   error: string | null;
+  updatedAt?: string;
 }
 
 export interface VitalityResult {

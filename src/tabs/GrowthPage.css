@@ -22,6 +22,40 @@
 .growth-hero-label-mid  { color: var(--text); }
 .growth-hero-label-low  { color: var(--text); }
 
+
+.growth-current-metrics {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  margin: 14px 0 0;
+}
+
+.growth-current-card {
+  display: grid;
+  gap: 8px;
+  padding: 15px 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+}
+
+.growth-current-card span {
+  color: var(--text-2);
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.growth-current-card strong {
+  font-size: 32px;
+  line-height: 1;
+}
+
+.growth-current-card small {
+  font-size: 15px;
+  color: var(--text-3);
+  margin-left: 3px;
+}
+
 .growth-primary-metrics {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -33,9 +67,10 @@
   display: grid;
   gap: 6px;
   padding: 14px 16px;
-  border: 1px solid var(--border);
+  border: 1px solid var(--accent-soft-2);
   border-radius: var(--radius-sm);
-  background: color-mix(in srgb, var(--surface) 78%, transparent);
+  background: color-mix(in srgb, var(--accent-soft) 64%, var(--surface));
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .growth-primary-card-main {
@@ -70,7 +105,7 @@
 /* 확장 없을 때: 4개 대표 지표 */
 .growth-sub-grid {
   gap: 18px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
 }
 
 /* 확장 있을 때: 2열 (확장 카드 2fr, 나머지 1fr) */

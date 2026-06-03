@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import os
-from threading import Lock
+from queue import Queue
+from threading import Lock, Thread
 from pathlib import Path
 from tempfile import NamedTemporaryFile
 from typing import Any
@@ -43,6 +44,7 @@ DEFAULT_DENSITY_MIN_VIDEO_SECONDS = float(os.getenv("CHECKMITE_DENSITY_MIN_VIDEO
 DEFAULT_ANALYSIS_WINDOW_SECONDS = float(os.getenv("CHECKMITE_ANALYSIS_WINDOW_SECONDS", "10"))
 DEFAULT_DENSITY_MAX_FRAMES = int(os.getenv("CHECKMITE_DENSITY_MAX_FRAMES", "0"))
 DEFAULT_DENSITY_MIN_SHARPNESS = float(os.getenv("CHECKMITE_DENSITY_MIN_SHARPNESS", "50"))
+DEFAULT_DEVICE = os.getenv("CHECKMITE_DEVICE", "0").strip() or None
 DEFAULT_DENSITY_MIN_BRIGHTNESS = float(os.getenv("CHECKMITE_DENSITY_MIN_BRIGHTNESS", "40"))
 DEFAULT_DENSITY_MAX_BRIGHTNESS = float(os.getenv("CHECKMITE_DENSITY_MAX_BRIGHTNESS", "220"))
 CLASS_NAMES = {
@@ -112,6 +114,8 @@ def get_vitality_model() -> YOLO:
     global _vitality_model
     if _vitality_model is None:
         if VITALITY_MODEL_PATH.exists():
+            # Temporary deployment note: ONNX Runtime GPU dependencies are
+            # provided by the Docker runtime image and LD_LIBRARY_PATH.
             _vitality_model = YOLO(str(VITALITY_MODEL_PATH), task="detect")
         else:
             _vitality_model = get_model()
@@ -182,8 +186,12 @@ def predict_frame_detections(
     frame: Any,
     conf: float,
     imgsz: int,
+    device: str | int | None = None,
 ) -> list[dict[str, Any]]:
-    result = model.predict(frame, conf=conf, imgsz=imgsz, verbose=False)[0]
+    predict_kwargs = {"conf": conf, "imgsz": imgsz, "verbose": False}
+    if device is not None:
+        predict_kwargs["device"] = device
+    result = model.predict(frame, **predict_kwargs)[0]
     if result.boxes is None:
         return []
     return [box_to_tracking_detection(box) for box in result.boxes]
@@ -269,6 +277,7 @@ def analyze_density_video(
                 frame=frame,
                 conf=conf,
                 imgsz=imgsz,
+                device=DEFAULT_DEVICE,
             )
             target_detections = [
                 detection for detection in detections
@@ -323,6 +332,36 @@ def analyze_density_video(
     }
 
 
+class AsyncTrackingVideoWriter:
+    def __init__(self, output_path: Path, fps: float, frame_size: tuple[int, int]):
+        self.output_path = output_path
+        self.queue: Queue[Any] = Queue()
+        fourcc = cv2.VideoWriter_fourcc(*"VP80")
+        self.writer = cv2.VideoWriter(str(output_path), fourcc, fps, frame_size)
+        if not self.writer.isOpened():
+            raise HTTPException(status_code=500, detail="Could not create tracking video")
+        self.thread = Thread(target=self._run, name="checkmite-tracking-writer", daemon=True)
+        self.thread.start()
+
+    def submit(self, frame: Any) -> None:
+        self.queue.put(frame.copy())
+
+    def close(self, wait: bool = False) -> None:
+        self.queue.put(None)
+        if wait:
+            self.thread.join()
+
+    def _run(self) -> None:
+        try:
+            while True:
+                frame = self.queue.get()
+                if frame is None:
+                    break
+                self.writer.write(frame)
+        finally:
+            self.writer.release()
+
+
 def analyze_vitality_video(
     *,
     model: YOLO,
@@ -346,15 +385,12 @@ def analyze_vitality_video(
         analysis_frame_limit = max(1, int(round(fps * DEFAULT_ANALYSIS_WINDOW_SECONDS)))
     if max_frames:
         analysis_frame_limit = min(analysis_frame_limit, max_frames) if analysis_frame_limit else max_frames
-    writer = None
+    writer: AsyncTrackingVideoWriter | None = None
     if render_tracking_video:
         if not tracking_video_path:
             tracking_video_path = video_path.with_name(f"{video_path.stem}-tracking.webm")
         tracking_video_path.parent.mkdir(parents=True, exist_ok=True)
-        fourcc = cv2.VideoWriter_fourcc(*"VP80")
-        writer = cv2.VideoWriter(str(tracking_video_path), fourcc, fps, (frame_width, frame_height))
-        if not writer.isOpened():
-            raise HTTPException(status_code=500, detail="Could not create tracking video")
+        writer = AsyncTrackingVideoWriter(tracking_video_path, fps, (frame_width, frame_height))
 
     tracker = TrackingService(motion_threshold_px=DEFAULT_VITALITY_MOTION_THRESHOLD_PX)
     vitality = VitalityService(
@@ -381,6 +417,7 @@ def analyze_vitality_video(
                 frame=frame,
                 conf=conf,
                 imgsz=imgsz,
+                device=DEFAULT_DEVICE,
             )
             detections = [
                 detection for detection in detections
@@ -408,7 +445,7 @@ def analyze_vitality_video(
                     points = [tuple(int(v) for v in item["center"]) for item in track["trajectory"][-30:]]
                     for point_a, point_b in zip(points, points[1:]):
                         cv2.line(frame, point_a, point_b, (255, 190, 70), 2)
-                writer.write(frame)
+                writer.submit(frame)
             frame_idx += 1
 
             if analysis_frame_limit and frame_idx >= analysis_frame_limit:
@@ -416,7 +453,7 @@ def analyze_vitality_video(
     finally:
         capture.release()
         if writer is not None:
-            writer.release()
+            writer.close(wait=False)
 
     summary_rows, aggregate = vitality.summarize(tracker.tracks, frame_idx, fps)
     result = {
@@ -439,8 +476,9 @@ def analyze_vitality_video(
         "tracks": summary_rows,
         "summary": aggregate,
     }
-    if render_tracking_video and tracking_video_path and tracking_video_path.exists():
+    if render_tracking_video and tracking_video_path:
         result["trackingVideoPath"] = str(tracking_video_path)
+        result["trackingVideoStatus"] = "processing"
     return result
 
 
@@ -499,6 +537,7 @@ def predict_tiled(
     tile_size: int,
     overlap: float,
     nms_iou: float,
+    device: str | int | None = None,
 ) -> tuple[list[dict[str, Any]], dict[str, int]]:
     image = cv2.imread(str(image_path))
     if image is None:
@@ -512,7 +551,7 @@ def predict_tiled(
     for y in ys:
         for x in xs:
             tile = image[y : min(y + tile_size, height), x : min(x + tile_size, width)]
-            result = model.predict(tile, conf=conf, imgsz=imgsz, iou=nms_iou, verbose=False)[0]
+            result = model.predict(tile, conf=conf, imgsz=imgsz, iou=nms_iou, verbose=False, device=device)[0]
             for box in result.boxes:
                 cls_id = int(box.cls[0])
                 box_conf = float(box.conf[0])
@@ -553,6 +592,7 @@ def model_info() -> dict[str, Any]:
         "vitality_weights": str(VITALITY_MODEL_PATH.relative_to(ROOT_DIR)) if VITALITY_MODEL_PATH.exists() else None,
         "weight_parts": [str(p.relative_to(ROOT_DIR)) for p in sorted(MODEL_PATH.parent.glob(MODEL_PART_GLOB))],
         "input_size": DEFAULT_IMGSZ,
+        "device": DEFAULT_DEVICE,
         "inference": {
             "mode": "sahi-style-tiled",
             "tile_size": DEFAULT_TILE_SIZE,
@@ -636,6 +676,7 @@ async def predict_image(
                 tile_size=tile_size,
                 overlap=overlap,
                 nms_iou=nms,
+                device=DEFAULT_DEVICE,
             )
         counts = {name: 0 for name in CLASS_NAMES.values()}
         for det in detections:

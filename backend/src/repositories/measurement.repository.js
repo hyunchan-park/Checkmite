@@ -13,6 +13,18 @@ export const measurementRepository = {
     return result.rows.map(mapMeasurement);
   },
 
+
+  async findLatestByBoxIdAndType(boxId, type, client = pool) {
+    const result = await client.query(
+      `SELECT * FROM measurements
+       WHERE culture_box_id = $1 AND type = $2
+       ORDER BY measured_at DESC, created_at DESC
+       LIMIT 1`,
+      [boxId, type]
+    );
+    return result.rows[0] ? mapMeasurement(result.rows[0]) : null;
+  },
+
   async create(input, client = pool) {
     const id = randomUUID();
     const result = await client.query(

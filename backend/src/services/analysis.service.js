@@ -26,6 +26,9 @@ const createUploadedFile = async (file, boxId, client) => {
 
 const numberOrZero = (value) => Number(value ?? 0);
 const errorMessage = (error) => (error instanceof Error ? error.message : String(error));
+const isShortDensityVideoError = (message) => message.includes("Density video must be at least");
+const isUnreadableVideoError = (message) => message.includes("Could not open video");
+const QUALITY_WARNING_TEXT = 'No sampled frame passed quality filters; selected the best available frame';
 const vitalityNoticeForSpeedRatio = (ratio) => {
   if (ratio === null || ratio === undefined || !Number.isFinite(Number(ratio))) return null;
   const value = Number(ratio);
@@ -177,11 +180,23 @@ export const analysisService = {
           sampleIndex,
         });
       } catch (error) {
+        const message = errorMessage(error);
+        if (isShortDensityVideoError(message) || isUnreadableVideoError(message)) {
+          completedOps += 2;
+          updateProgress(sampleIndex, isShortDensityVideoError(message) ? '10초 미만 제외' : '읽을 수 없는 영상 제외', {
+            status: 'skipped',
+            originalName: file.originalname,
+            error: isShortDensityVideoError(message)
+              ? '10초 미만 영상이라 분석에서 제외했습니다.'
+              : '영상 파일을 열 수 없어 분석에서 제외했습니다.',
+          });
+          continue;
+        }
         updateProgress(sampleIndex, '밀도 분석 실패', {
           status: 'failed',
-          error: errorMessage(error),
+          error: message,
         });
-        throw new Error(`${sampleIndex}/${densityFiles.length} 밀도 분석 실패: ${errorMessage(error)}`);
+        throw new Error(`${sampleIndex}/${densityFiles.length} 밀도 분석 실패: ${message}`);
       }
       completedOps += 1;
       updateProgress(sampleIndex, '활력도 분석 중', {
@@ -189,7 +204,12 @@ export const analysisService = {
         bestFrameCount: densityResult.bestFrameCount,
         estimatedCountPerMl: densityResult.estimatedCountPerMl,
       });
-      const trackingVideo = sampleIndex === 1 ? trackingVideoOutputFor(file) : null;
+      const trackingVideo = sampleResults.length === 0 ? trackingVideoOutputFor(file) : null;
+      if (trackingVideo) {
+        updateProgress(sampleIndex, '트래킹 영상 생성 중', {
+          trackingVideoUrl: trackingVideo.url,
+        });
+      }
       let vitalityResult;
       try {
         vitalityResult = await modelRuntimeService.inferVitality({
@@ -218,6 +238,7 @@ export const analysisService = {
         activeRatio: vitalityResult.activeRatio,
         confirmedTracks: vitalityResult.confirmedTracks,
         movingTracks: vitalityResult.movingTracks,
+        trackingVideoUrl: vitalityResult.trackingVideoUrl,
       });
       sampleResults.push({
         sampleIndex,
@@ -225,6 +246,10 @@ export const analysisService = {
         density: densityResult,
         vitality: vitalityResult,
       });
+    }
+
+    if (sampleResults.length < 1) {
+      throw new Error('분석 가능한 10초 이상 영상이 없습니다. 10초 미만 영상은 자동 제외됩니다.');
     }
 
     const estimatedCounts = sampleResults.map((result) => Number(result.density.estimatedCountPerMl ?? result.density.countValue ?? 0));
@@ -244,9 +269,22 @@ export const analysisService = {
       0
     ) / sampleResults.length;
     const totalSampledFrames = sampleResults.reduce((sum, result) => sum + Number(result.density.sampledFrames ?? 0), 0);
-    const warnings = sampleResults.flatMap((result) =>
-      (result.density.warnings || []).map((warning) => `sample ${result.sampleIndex}: ${warning}`)
+    const rawWarnings = sampleResults.flatMap((result) =>
+      (result.density.warnings || []).map((warning) => ({ sampleIndex: result.sampleIndex, warning }))
     );
+    const qualityWarningSamples = rawWarnings
+      .filter((item) => item.warning.includes(QUALITY_WARNING_TEXT))
+      .map((item) => item.sampleIndex);
+    const warnings = rawWarnings
+      .filter((item) => !item.warning.includes(QUALITY_WARNING_TEXT))
+      .map((item) => `sample ${item.sampleIndex}: ${item.warning}`);
+    const qualityWarningSummary = qualityWarningSamples.length
+      ? {
+        count: qualityWarningSamples.length,
+        sampleIndices: qualityWarningSamples,
+        message: `품질 기준을 통과한 프레임이 없는 샘플 ${qualityWarningSamples.length}개는 최선 프레임으로 분석했습니다.`,
+      }
+      : null;
     const vitalityScores = sampleResults.map((result) => Number(result.vitality.vitalityScore ?? result.vitality.score ?? 0));
     const activeRatios = sampleResults
       .map((result) => result.vitality.activeRatio)
@@ -294,6 +332,7 @@ export const analysisService = {
       selectedFrameQuality: representativeSample?.density.selectedFrameQuality,
       densityGrade: estimatedCountPerMl >= 10 ? 'marketable' : 'low',
       warnings,
+      qualityWarningSummary,
       frameCounts: sampleResults.flatMap((result) =>
         (result.density.frameCounts || []).map((frame) => ({
           ...frame,
@@ -321,6 +360,9 @@ export const analysisService = {
     }
     const countValue = Math.round(estimatedCountPerMl);
     const vitalityScore = Number(averageVitalityScore.toFixed(2));
+
+    const previousDensity = await measurementRepository.findLatestByBoxIdAndType(input.boxId, 'density');
+    const previousVitality = await measurementRepository.findLatestByBoxIdAndType(input.boxId, 'vitality');
 
     return withTransaction(async (client) => {
       const uploadedFiles = [];
@@ -424,6 +466,7 @@ export const analysisService = {
           selectedFrameQuality: modelResult.selectedFrameQuality,
           densityGrade: modelResult.densityGrade,
           warnings: modelResult.warnings || [],
+          qualityWarningSummary: modelResult.qualityWarningSummary,
         },
         vitality: {
           score: vitalityScore,
@@ -437,6 +480,20 @@ export const analysisService = {
           trackingVideoUrl: modelResult.trackingVideoUrl,
           trend: modelResult.vitalityTrend,
           sampleCount: modelResult.sampleCount,
+        },
+        previous: {
+          density: previousDensity ? {
+            measurementId: previousDensity.id,
+            measuredAt: previousDensity.measuredAt,
+            densityPerLiter: previousDensity.densityPerLiter,
+            countValue: previousDensity.countValue,
+          } : null,
+          vitality: previousVitality ? {
+            measurementId: previousVitality.id,
+            measuredAt: previousVitality.measuredAt,
+            score: previousVitality.vitalityScore,
+            activeRatio: previousVitality.activeRatio,
+          } : null,
         },
         samples: sampleResults.map((sample) => ({
           sampleIndex: sample.sampleIndex,

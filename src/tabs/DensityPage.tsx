@@ -11,7 +11,7 @@ import type { CultureBox, PhaseId } from '../types';
 
 const DEN_STEPS = [
   '1 mL 배지 영상 확인…',
-  '각 영상 10초 이상 여부 검증…',
+  '10초 미만/빈 영상 자동 제외…',
   '영상별 좋은 프레임 선별…',
   '업로드 배지 count 평균 및 활력도 산출…',
   '통합 분석 결과 저장…',
@@ -44,6 +44,25 @@ interface DensityResultViewProps {
   onReset: () => void;
 }
 
+
+function formatSigned(value: number, digits = 0) {
+  const rounded = Number(value.toFixed(digits));
+  return `${rounded > 0 ? '+' : ''}${rounded.toLocaleString()}`;
+}
+
+function formatPercentChange(previous?: number | null, current?: number | null) {
+  if (previous == null || current == null || previous === 0) return null;
+  const value = ((current - previous) / previous) * 100;
+  return `${value > 0 ? '+' : ''}${value.toFixed(1)}%`;
+}
+
+function metricDelta(previous?: number | null, current?: number | null, digits = 0) {
+  if (previous == null || current == null) return '-';
+  const diff = current - previous;
+  const percent = formatPercentChange(previous, current);
+  return percent ?? formatSigned(diff, digits);
+}
+
 function vitalityNotice(vitality: DensityResult['vitality']) {
   if (vitality?.notice) return vitality.notice;
   if (vitality?.averageSpeedRatio == null) return null;
@@ -72,39 +91,48 @@ function vitalityNotice(vitality: DensityResult['vitality']) {
 function DensityResultView({ data, onReset }: DensityResultViewProps) {
   const density = data.density;
   const vitality = data.vitality;
+  const previousDensity = data.previous?.density?.densityPerLiter;
+  const previousVitality = data.previous?.vitality?.score;
   const perLiter = density.currentDensityPerLiter.toLocaleString();
   const densityLevel = density.densityGrade === 'marketable' ? '상품성 있음' : '낮음';
   const activeRatioPct = vitality?.activeRatio != null ? Math.round(vitality.activeRatio * 100) : null;
   const notice = vitalityNotice(vitality);
   const noticeLevel = notice?.level ?? 'normal';
-  const noticeBadgeKind = noticeLevel === 'danger' ? 'low' as const : noticeLevel === 'caution' ? 'mid' as const : 'high' as const;
+  const densityDelta = metricDelta(previousDensity, density.currentDensityPerLiter);
+  const vitalityDelta = metricDelta(previousVitality, vitality?.score, 1);
 
   return (
     <div className="fade-in grid">
-      {/* 증식 활력 대표지표 */}
       <div className={`card vitality-hero-${noticeLevel}`}>
         <div className="card-head">
-          <div className="card-title">증식 활력 대표지표</div>
+          <div className="card-title">통합 분석 요약</div>
           <Badge kind="accent" dot>완료</Badge>
         </div>
-        <div className="vitality-hero-body">
-          <div className="vitality-hero-top">
-            <Badge kind={noticeBadgeKind} dot>{notice?.label ?? '정상 관찰'}</Badge>
-            {vitality?.averageSpeedRatio != null && (
-              <div className="vitality-hero-ratio">
-                <span className="vhr-num tnum">{vitality.averageSpeedRatio.toFixed(2)}<em>x</em></span>
-                <span className="vhr-desc">먹이응애 기준 속도비</span>
-              </div>
-            )}
+        <div className="summary-metrics summary-metrics-priority">
+          <div className="summary-metric summary-metric-primary">
+            <span className="sm-label">현재 밀도</span>
+            <strong className="tnum">{perLiter}<small>마리/L</small></strong>
           </div>
-          {notice?.message && (
-            <p className="vitality-hero-msg">{notice.message}</p>
-          )}
+          <div className="summary-metric summary-metric-primary">
+            <span className="sm-label">현재 활력도</span>
+            <strong className="tnum">{vitality?.score ?? '-'}<small>점</small></strong>
+            <div className="sm-secondary-wrap">
+              <span>먹이응애 기준 속도</span>
+              <strong className="tnum sm-secondary">{vitality?.averageSpeedRatio != null ? vitality.averageSpeedRatio.toFixed(2) : '-'}<small>x</small></strong>
+            </div>
+          </div>
+          <div className="summary-metric summary-metric-previous">
+            <span className="sm-label">직전 밀도</span>
+            <strong className="tnum">{previousDensity != null ? previousDensity.toLocaleString() : '-'}<small>마리/L</small></strong>
+          </div>
+          <div className="summary-metric summary-metric-previous">
+            <span className="sm-label">직전 활력도</span>
+            <strong className="tnum">{previousVitality != null ? previousVitality.toFixed(1) : '-'}<small>점</small></strong>
+          </div>
         </div>
       </div>
 
-      {/* 현재 count · 활력도 · 활동비율 */}
-      <div className="grid grid-3">
+      <div className="grid grid-2">
         <div className="stat">
           <div className="stat-label">현재 count</div>
           <div className="stat-value tnum">
@@ -113,16 +141,9 @@ function DensityResultView({ data, onReset }: DensityResultViewProps) {
           <div className="stat-sub">최대 프레임 {density.bestFrameCount}마리</div>
         </div>
         <div className="stat">
-          <div className="stat-label">현재 활력도</div>
-          <div className="stat-value tnum">{vitality?.score ?? '-'}<small>점</small></div>
-          <div className="stat-sub">0 ~ 100점 척도</div>
-        </div>
-        <div className="stat">
-          <div className="stat-label">활동 개체 비율</div>
-          <div className="stat-value tnum">
-            {activeRatioPct != null ? <>{activeRatioPct}<small>%</small></> : '-'}
-          </div>
-          <div className="stat-sub">이동 감지 개체</div>
+          <div className="stat-label">이번 변화</div>
+          <div className="stat-value tnum change-pair"><span>밀도 {densityDelta}</span><span>활력도 {vitalityDelta}</span></div>
+          <div className="stat-sub">직전 측정 대비</div>
         </div>
       </div>
 
@@ -136,9 +157,15 @@ function DensityResultView({ data, onReset }: DensityResultViewProps) {
           <div className="metric-row"><span className="mr-k">L당 밀도</span><span className="mr-v mono">{perLiter} 마리/L</span></div>
           <div className="metric-row"><span className="mr-k">평균 count</span><span className="mr-v mono">{density.averageFrameCount?.toFixed(1) ?? '-'} 마리</span></div>
           <div className="metric-row"><span className="mr-k">분석 영상 수</span><span className="mr-v mono">{density.sampleCount ?? data.samples?.length ?? 0}개</span></div>
+          {density.qualityWarningSummary && (
+            <div className="quality-note">
+              {density.qualityWarningSummary.message}
+              <span>샘플 {density.qualityWarningSummary.sampleIndices.join(', ')}</span>
+            </div>
+          )}
           {(density.warnings?.length ?? 0) > 0 && (
-            <div style={{ marginTop: 10, color: 'var(--warning, #b7791f)', fontSize: 13 }}>
-              {density.warnings?.join(' · ')}
+            <div className="quality-note quality-note-warn">
+              추가 경고 {density.warnings?.length}건이 있습니다.
             </div>
           )}
         </div>
@@ -246,11 +273,11 @@ export function DensityPage({ boxes, selectedBoxId, onBoxChange, onBoxCreate }: 
       return;
     }
     setError(null);
-    Promise.all(files.map(getVideoDuration))
+    Promise.all(files.map((file) => getVideoDuration(file).catch(() => null)))
       .then((durations) => {
-        const shortIndex = durations.findIndex((duration) => duration < 10);
-        if (shortIndex >= 0) throw new Error(`${shortIndex + 1}번 영상이 10초 미만입니다. 모든 영상은 10초 이상이어야 합니다.`);
-        return api.startDensityAnalysis(selectedBoxId, files, setUploadPercent);
+        const validFiles = files.filter((file, index) => file.size > 0 && (durations[index] === null || durations[index] >= 10));
+        if (validFiles.length < 1) throw new Error('분석 가능한 10초 이상 영상이 없습니다. 10초 미만이거나 빈 영상은 자동 제외됩니다.');
+        return api.startDensityAnalysis(selectedBoxId, validFiles, setUploadPercent);
       })
       .then((job) => {
         setProgress(job);
@@ -289,6 +316,8 @@ export function DensityPage({ boxes, selectedBoxId, onBoxChange, onBoxCreate }: 
     // 실제 완료는 backend progress polling으로 처리한다.
   };
 
+  const progressTrackingUrl = progress?.samples.find((sample) => sample.trackingVideoUrl)?.trackingVideoUrl;
+
   const reset = () => {
     setPhase('idle');
     setFiles([]);
@@ -307,7 +336,7 @@ export function DensityPage({ boxes, selectedBoxId, onBoxChange, onBoxCreate }: 
       <div className="page-head">
         <div className="page-eyebrow"><span className="pe-dot" />밀도 측정 · DENSITY</div>
         <h1 className="page-title">영상 기반 통합 분석</h1>
-        <p className="page-desc">1개 이상의 1 mL 배지 영상을 업로드하면 각 영상의 처음 10초 구간으로 평균 count, L당 밀도, 활력도를 함께 산출합니다.</p>
+        <p className="page-desc">1개 이상의 1 mL 배지 영상을 업로드하면 10초 미만이거나 빈 영상은 자동 제외하고, 각 영상의 처음 10초 구간으로 평균 count, L당 밀도, 활력도를 함께 산출합니다.</p>
       </div>
 
       <div style={{ marginBottom: 18 }}>
@@ -339,7 +368,7 @@ export function DensityPage({ boxes, selectedBoxId, onBoxChange, onBoxCreate }: 
             />
             <div className="up-ic"><Icon name="video" /></div>
             <div className="up-title">영상을 끌어다 놓거나 클릭하여 업로드</div>
-            <div className="up-desc">1 mL 배지에서 촬영한 10초 이상 영상 · 여러 개 동시 선택 가능</div>
+            <div className="up-desc">1 mL 배지 영상 · 10초 미만/빈 파일은 자동 제외 · 여러 개 동시 선택 가능</div>
             <div className="up-formats">video/* · 최대 500 MB / 파일</div>
           </div>
           <div className="card">
@@ -421,6 +450,24 @@ export function DensityPage({ boxes, selectedBoxId, onBoxChange, onBoxCreate }: 
                     </span>
                   </div>
                 ))}
+              </div>
+            </div>
+          )}
+          {progressTrackingUrl && (
+            <div className="card" style={{ marginTop: 16 }}>
+              <div className="card-head">
+                <div className="card-title">트래킹 영상 생성 중</div>
+                <span className="card-sub">1번 영상 기준</span>
+              </div>
+              <div style={{ borderRadius: 8, overflow: 'hidden', background: '#050608' }}>
+                <video
+                  key={`${progressTrackingUrl}-${progress?.updatedAt ?? progress?.percent ?? 0}`}
+                  src={progressTrackingUrl}
+                  controls
+                  muted
+                  playsInline
+                  style={{ display: 'block', width: '100%', maxHeight: 420, objectFit: 'contain' }}
+                />
               </div>
             </div>
           )}

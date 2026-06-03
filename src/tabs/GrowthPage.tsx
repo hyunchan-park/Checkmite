@@ -124,7 +124,7 @@ export function GrowthPage({
   const box = boxes.find((item) => item.id === selectedBoxId) ?? boxes[0];
   const [growth, setGrowth] = useState<GrowthResult | null>(null);
   const [measurements, setMeasurements] = useState<Measurement[]>([]);
-  const [expandedCard, setExpandedCard] = useState<'count' | 'trend' | 'cumulative' | 'recent' | null>(null);
+  const [expandedCard, setExpandedCard] = useState<'count' | 'vitality' | 'trend' | 'densityTrend' | 'vitalityTrend' | null>(null);
 
   useEffect(() => {
     if (!box?.id) return;
@@ -193,10 +193,20 @@ export function GrowthPage({
             </span>
           </div>
         </div>
+        <div className="growth-current-metrics">
+          <div className="growth-current-card">
+            <span>현재 밀도</span>
+            <strong className="tnum">{growth && growth.currentDensityPerLiter > 0 ? numberValue(growth.currentDensityPerLiter) : '-'}<small>마리 / 1L</small></strong>
+          </div>
+          <div className="growth-current-card">
+            <span>현재 활력도</span>
+            <strong className="tnum">{growth && growth.latestVitalityScore > 0 ? numberValue(growth.latestVitalityScore, 1) : '-'}<small>점</small></strong>
+          </div>
+        </div>
       </div>
 
       <div className={`growth-sub${expandedCard ? ' growth-sub-has-expanded' : ' grid growth-sub-grid'}`}>
-        {(['count', 'trend', 'recent', 'cumulative'] as const).map((key) => {
+        {(['count', 'vitality', 'trend', 'densityTrend', 'vitalityTrend'] as const).map((key) => {
           const isExpanded = expandedCard === key;
           const toggle = () => setExpandedCard(isExpanded ? null : key);
           return (
@@ -211,9 +221,10 @@ export function GrowthPage({
               <div className="card-head">
                 <div className="card-title">
                   {key === 'count' && '현재 마리 / 1L'}
+                  {key === 'vitality' && '현재 활력도'}
                   {key === 'trend' && '증식률 그래프'}
-                  {key === 'recent' && '직전 측정 대비 증식률'}
-                  {key === 'cumulative' && '첫 측정 대비 증식률'}
+                  {key === 'densityTrend' && '밀도 그래프'}
+                  {key === 'vitalityTrend' && '활력도 그래프'}
                 </div>
                 <span className="growth-expand-icon">
                   {isExpanded ? <Icon name="x" /> : <Icon name="scan" />}
@@ -238,6 +249,24 @@ export function GrowthPage({
                 </>
               )}
 
+              {key === 'vitality' && (
+                <>
+                  <div className="stat-value tnum">
+                    {growth && growth.latestVitalityScore > 0 ? numberValue(growth.latestVitalityScore, 1) : '-'}
+                    <small>점</small>
+                  </div>
+                  <div className="stat-sub">평균 {numberValue(growth?.averageVitalityScore, 1)}점</div>
+                  {isExpanded && (
+                    <div className="growth-sub-detail">
+                      <span>초기 {numberValue(growth?.firstVitalityScore, 1)}점</span>
+                      <span>직전 {numberValue(growth?.previousVitalityScore, 1)}점</span>
+                      <span>최근 변화 {signedNumberValue(growth?.recentVitalityChange, 1)}점</span>
+                      <span>최근 변화율 {signedPercentValue(growth?.recentVitalityChangeRatePercent)}</span>
+                    </div>
+                  )}
+                </>
+              )}
+
               {key === 'trend' && (
                 <>
                   {growthRateTrend.length > 1
@@ -254,40 +283,37 @@ export function GrowthPage({
                 </>
               )}
 
-              {key === 'cumulative' && (
+              {key === 'densityTrend' && (
                 <>
-                  <div className="stat-value tnum">
-                    {growth ? signedNumberValue(growth.weightedGrowthRatePercent, 1) : '-'}<small>%</small>
-                  </div>
-                  <div className="stat-sub">{growth && firstCountDate ? `${firstCountDate} 대비 통합 변화` : '첫 측정 대비'}</div>
+                  {(growth?.densityTrend?.length ?? 0) > 1
+                    ? <LineChart data={growth!.densityTrend.map((point) => point.densityPerLiter)} xlabel="측정" height={isExpanded ? 300 : 180} />
+                    : <div className="growth-empty">밀도 추이를 보려면 density 측정 데이터가 더 필요합니다.</div>}
                   {isExpanded && (
                     <div className="growth-sub-detail">
-                      <span>마리 / 1L 변화율 {signedPercentValue(growth?.countChangeRatePercent)}</span>
-                      <span>활력도 변화율 {signedPercentValue(growth?.vitalityChangeRatePercent)}</span>
-                      <span>가중치 마리 / 1L 0.75</span>
-                      <span>가중치 활력도 0.25</span>
+                      <span>초기 {numberValue(growth?.firstDensityPerLiter)} 마리 / 1L</span>
+                      <span>현재 {numberValue(growth?.currentDensityPerLiter)} 마리 / 1L</span>
+                      <span>직전 대비 {signedPercentValue(growth?.recentCountChangeRatePercent)}</span>
                     </div>
                   )}
                 </>
               )}
 
-              {key === 'recent' && (
+              {key === 'vitalityTrend' && (
                 <>
-                  <div className="stat-value tnum">
-                    {growth && previousCountDate ? signedNumberValue(growth.recentWeightedGrowthRatePercent, 1) : '-'}<small>%</small>
-                  </div>
-                  <div className="stat-sub">{growth && previousCountDate ? `${previousCountDate} 대비 통합 변화` : '직전 측정 대비'}</div>
+                  {(growth?.vitalityTrend?.length ?? 0) > 1
+                    ? <LineChart data={growth!.vitalityTrend.map((point) => point.score)} xlabel="측정" height={isExpanded ? 300 : 180} />
+                    : <div className="growth-empty">활력도 추이를 보려면 vitality 측정 데이터가 더 필요합니다.</div>}
                   {isExpanded && (
                     <div className="growth-sub-detail">
-                      <span>마리 / 1L 변화율 {signedPercentValue(growth?.recentCountChangeRatePercent)}</span>
-                      <span>활력도 변화율 {signedPercentValue(growth?.recentVitalityChangeRatePercent)}</span>
-                      <span>통합 증식률 {signedPercentValue(growth?.recentWeightedGrowthRatePercent)}</span>
-                      <span>관찰 기준 {growth?.recentDropThresholdPercent.toFixed(0) ?? '-'}% 이하</span>
-                      <span>{growth?.recentDropDetected ? '주의 관찰 대상' : '최근 변화 안정'}</span>
+                      <span>초기 {numberValue(growth?.firstVitalityScore, 1)}점</span>
+                      <span>현재 {numberValue(growth?.latestVitalityScore, 1)}점</span>
+                      <span>직전 대비 {signedPercentValue(growth?.recentVitalityChangeRatePercent)}</span>
                     </div>
                   )}
                 </>
               )}
+
+
             </div>
           );
         })}
