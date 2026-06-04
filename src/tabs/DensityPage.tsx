@@ -63,6 +63,16 @@ function metricDelta(previous?: number | null, current?: number | null, digits =
   return percent ?? formatSigned(diff, digits);
 }
 
+function formatQualityWarningSamples(summary: DensityResult['density']['qualityWarningSummary']) {
+  if (!summary) return '';
+  const samples: Array<{ sampleIndex: number; originalName?: string }> = summary.samples?.length
+    ? summary.samples
+    : summary.sampleIndices.map((sampleIndex) => ({ sampleIndex }));
+  return samples
+    .map((sample) => `${sample.sampleIndex}번 영상${sample.originalName ? ` · ${sample.originalName}` : ''}`)
+    .join(', ');
+}
+
 function vitalityNotice(vitality: DensityResult['vitality']) {
   if (vitality?.notice) return vitality.notice;
   if (vitality?.averageSpeedRatio == null) return null;
@@ -160,7 +170,7 @@ function DensityResultView({ data, onReset }: DensityResultViewProps) {
           {density.qualityWarningSummary && (
             <div className="quality-note">
               {density.qualityWarningSummary.message}
-              <span>샘플 {density.qualityWarningSummary.sampleIndices.join(', ')}</span>
+              <span>{formatQualityWarningSamples(density.qualityWarningSummary)}</span>
             </div>
           )}
           {(density.warnings?.length ?? 0) > 0 && (

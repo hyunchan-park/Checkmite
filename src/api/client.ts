@@ -50,7 +50,7 @@ export interface DensityResult {
     };
     densityGrade?: string;
     warnings?: string[];
-    qualityWarningSummary?: { count: number; sampleIndices: number[]; message: string } | null;
+    qualityWarningSummary?: { count: number; sampleIndices: number[]; samples?: Array<{ sampleIndex: number; originalName?: string }>; message: string } | null;
   };
   vitality?: {
     score: number;

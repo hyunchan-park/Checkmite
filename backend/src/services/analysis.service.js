@@ -206,9 +206,7 @@ export const analysisService = {
       });
       const trackingVideo = sampleResults.length === 0 ? trackingVideoOutputFor(file) : null;
       if (trackingVideo) {
-        updateProgress(sampleIndex, '트래킹 영상 생성 중', {
-          trackingVideoUrl: trackingVideo.url,
-        });
+        updateProgress(sampleIndex, '트래킹 영상 생성 중');
       }
       let vitalityResult;
       try {
@@ -270,19 +268,24 @@ export const analysisService = {
     ) / sampleResults.length;
     const totalSampledFrames = sampleResults.reduce((sum, result) => sum + Number(result.density.sampledFrames ?? 0), 0);
     const rawWarnings = sampleResults.flatMap((result) =>
-      (result.density.warnings || []).map((warning) => ({ sampleIndex: result.sampleIndex, warning }))
+      (result.density.warnings || []).map((warning) => ({
+        sampleIndex: result.sampleIndex,
+        originalName: result.originalName,
+        warning,
+      }))
     );
     const qualityWarningSamples = rawWarnings
       .filter((item) => item.warning.includes(QUALITY_WARNING_TEXT))
-      .map((item) => item.sampleIndex);
+      .map((item) => ({ sampleIndex: item.sampleIndex, originalName: item.originalName }));
     const warnings = rawWarnings
       .filter((item) => !item.warning.includes(QUALITY_WARNING_TEXT))
-      .map((item) => `sample ${item.sampleIndex}: ${item.warning}`);
+      .map((item) => `${item.sampleIndex}번 영상 ${item.originalName ?? ''}: ${item.warning}`.trim());
     const qualityWarningSummary = qualityWarningSamples.length
       ? {
         count: qualityWarningSamples.length,
-        sampleIndices: qualityWarningSamples,
-        message: `품질 기준을 통과한 프레임이 없는 샘플 ${qualityWarningSamples.length}개는 최선 프레임으로 분석했습니다.`,
+        sampleIndices: qualityWarningSamples.map((item) => item.sampleIndex),
+        samples: qualityWarningSamples,
+        message: `품질 기준을 통과한 프레임이 없는 영상 ${qualityWarningSamples.length}개는 최선 프레임으로 분석했습니다.`,
       }
       : null;
     const vitalityScores = sampleResults.map((result) => Number(result.vitality.vitalityScore ?? result.vitality.score ?? 0));

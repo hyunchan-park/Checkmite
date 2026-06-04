@@ -453,7 +453,7 @@ def analyze_vitality_video(
     finally:
         capture.release()
         if writer is not None:
-            writer.close(wait=False)
+            writer.close(wait=True)
 
     summary_rows, aggregate = vitality.summarize(tracker.tracks, frame_idx, fps)
     result = {
